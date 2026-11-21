@@ -21,5 +21,17 @@ services:
       MONGO_URI: mongodb://mongo:27017
       SYMBOLS: btcusdt,ethusdt,bnbusdt,solusdt,xrpusdt
 
+  loader:                       # carga histórica única (la ejecuta setup.sh)
+    build: ./collector
+    profiles: ["load"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: ["python", "-u", "loader.py"]
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      SYMBOLS: btcusdt,ethusdt,bnbusdt,solusdt,xrpusdt
+      TARGET_DOCS: ${TARGET_DOCS:-10000000}
+
 volumes:
   mongo_data:

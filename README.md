@@ -10,7 +10,23 @@ recolector en Python guarda en MongoDB. Crece solo mientras los contenedores est
 - Docker y Docker Compose
 - Acceso a internet (para conectarse a `stream.binance.com`)
 
-## Instalación y ejecución
+## Instalación y carga de datos (10 millones de trades)
+
+```bash
+./setup.sh
+```
+
+Construye las imágenes, levanta MongoDB y lo llena con **10.000.000 de trades** históricos de Binance
+(archivos públicos de [data.binance.vision](https://data.binance.vision), mismos campos que el WebSocket).
+Recorre los días hacia atrás desde ayer, para BTC, ETH, BNB, SOL y XRP, hasta llegar al objetivo.
+Se puede volver a ejecutar sin duplicar: si se cortó, continúa desde donde quedó.
+
+```bash
+TARGET_DOCS=1000000 ./setup.sh   # otro objetivo
+./setup.sh --live                # además deja corriendo el recolector en vivo (seguirá sumando trades)
+```
+
+## Recolector en vivo
 
 ```bash
 docker compose up -d --build
@@ -69,7 +85,9 @@ db.trades.aggregate([
 
 ```
 docker-compose.yml     # mongo + collector
+setup.sh               # despliegue + carga histórica hasta TARGET_DOCS
 collector/collector.py # WebSocket -> lotes -> insert_many en colección time-series
+collector/loader.py    # carga histórica desde data.binance.vision (servicio `loader`, perfil "load")
 collector/Dockerfile
 ```
 
