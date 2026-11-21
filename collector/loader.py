@@ -24,6 +24,7 @@ from collector import COLLECTION, DB_NAME, SYMBOLS, get_collection
 TARGET_DOCS = int(os.getenv("TARGET_DOCS", "10000000"))
 BATCH_SIZE = int(os.getenv("LOAD_BATCH_SIZE", "10000"))
 MAX_DAYS_BACK = int(os.getenv("MAX_DAYS_BACK", "60"))
+PROGRESS_SECONDS = float(os.getenv("PROGRESS_SECONDS", "2"))   # cada cuánto se muestra el avance
 BASE_URL = "https://data.binance.vision/data/spot/daily/trades"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -44,9 +45,21 @@ def download(symbol, day):
     fd, path = tempfile.mkstemp(suffix=".zip")
     h = hashlib.sha256()
     with os.fdopen(fd, "wb") as f, urllib.request.urlopen(url, timeout=120) as r:
+        size = int(r.headers.get("Content-Length", 0))
+        log.info("Descargando %s (%.1f MB)...", name, size / 1e6)
+        done, started = 0, time.monotonic()
+        last = started
         while chunk := r.read(1 << 20):
             f.write(chunk)
             h.update(chunk)
+            done += len(chunk)
+            now = time.monotonic()
+            if now - last >= PROGRESS_SECONDS:
+                last = now
+                speed = done / (now - started)
+                left = fmt_secs((size - done) / speed) if size and speed else "?"
+                log.info("  descarga %s: %.1f / %.1f MB (%.0f%%) | %.1f MB/s | restante ~%s",
+                         name, done / 1e6, size / 1e6, 100 * done / size if size else 0, speed / 1e6, left)
     if h.hexdigest() != expected:
         os.remove(path)
         raise ValueError(f"Checksum inválido para {name}")
@@ -75,6 +88,37 @@ def rows(path, symbol):
             }
 
 
+def fmt_secs(s):
+    s = int(s)
+    return f"{s // 3600}h {s % 3600 // 60:02d}m {s % 60:02d}s" if s >= 3600 else f"{s // 60}m {s % 60:02d}s"
+
+
+class Progress:
+    """Muestra el avance total cada PROGRESS_SECONDS: documentos, porcentaje, velocidad y tiempo restante."""
+
+    def __init__(self, start_total):
+        self.start_total = start_total
+        self.started = self.last = time.monotonic()
+        self.excluded = 0.0      # segundos de descarga: no cuentan para la velocidad de inserción
+
+    def exclude(self, seconds):
+        self.excluded += seconds
+
+    def show(self, total, label, force=False):
+        now = time.monotonic()
+        if not force and now - self.last < PROGRESS_SECONDS:
+            return
+        self.last = now
+        elapsed = now - self.started
+        inserting = elapsed - self.excluded
+        rate = (total - self.start_total) / inserting if inserting > 0 else 0
+        eta = fmt_secs((TARGET_DOCS - total) / rate) if rate > 0 else "?"
+        pct = 100 * total / TARGET_DOCS
+        log.info("Avance: %s / %s (%5.1f%%) | %s docs/s | transcurrido %s | restante ~%s | %s",
+                 f"{total:,}".replace(",", "."), f"{TARGET_DOCS:,}".replace(",", "."), pct,
+                 f"{rate:,.0f}".replace(",", "."), fmt_secs(elapsed), eta, label)
+
+
 def day_range(day):
     start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
     return {"$gte": start, "$lt": start + timedelta(days=1)}
@@ -92,7 +136,7 @@ def main():
 
     total = coll.count_documents({})
     log.info("Documentos en %s.%s: %d. Objetivo: %d", DB_NAME, COLLECTION, total, TARGET_DOCS)
-    started = time.monotonic()
+    prog = Progress(total)
     today = datetime.now(timezone.utc).date()
 
     for back in range(1, MAX_DAYS_BACK + 1):
@@ -103,7 +147,9 @@ def main():
             key = f"{sym}-{day}"
             if progress.find_one({"_id": key, "status": "done"}):
                 continue
+            t0 = time.monotonic()
             path = download(sym, day)
+            prog.exclude(time.monotonic() - t0)
             if path is None:
                 log.info("%s no está publicado todavía, se salta", key)
                 continue
@@ -120,6 +166,7 @@ def main():
                         coll.insert_many(buf, ordered=False)
                         loaded += len(buf)
                         buf = []
+                        prog.show(total + loaded, key)
                         if total + loaded >= TARGET_DOCS:
                             break
                 if buf:
@@ -129,8 +176,8 @@ def main():
                 os.remove(path)
             total += loaded
             progress.update_one({"_id": key}, {"$set": {"status": "done", "docs": loaded}})
-            rate = total / max(time.monotonic() - started, 1e-9)
-            log.info("%s: %d trades cargados. Total: %d / %d (%.0f docs/s)", key, loaded, total, TARGET_DOCS, rate)
+            log.info("%s terminado: %d trades cargados", key, loaded)
+            prog.show(total, key, force=True)
         if total >= TARGET_DOCS:
             break
 
