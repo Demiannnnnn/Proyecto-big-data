@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 from collector import COLLECTION, DB_NAME, SYMBOLS, get_collection
 
-TARGET_DOCS = int(os.getenv("TARGET_DOCS", "10000000"))
+TARGET_DOCS = int(os.getenv("TARGET_DOCS", "10000000"))   # mínimo: se cargan días completos hasta superarlo
 BATCH_SIZE = int(os.getenv("LOAD_BATCH_SIZE", "10000"))
 MAX_DAYS_BACK = int(os.getenv("MAX_DAYS_BACK", "60"))
 PROGRESS_SECONDS = float(os.getenv("PROGRESS_SECONDS", "2"))   # cada cuánto se muestra el avance
@@ -112,7 +112,7 @@ class Progress:
         elapsed = now - self.started
         inserting = elapsed - self.excluded
         rate = (total - self.start_total) / inserting if inserting > 0 else 0
-        eta = fmt_secs((TARGET_DOCS - total) / rate) if rate > 0 else "?"
+        eta = fmt_secs(max(TARGET_DOCS - total, 0) / rate) if rate > 0 else "?"
         pct = 100 * total / TARGET_DOCS
         log.info("Avance: %s / %s (%5.1f%%) | %s docs/s | transcurrido %s | restante ~%s | %s",
                  f"{total:,}".replace(",", "."), f"{TARGET_DOCS:,}".replace(",", "."), pct,
@@ -139,11 +139,14 @@ def main():
     prog = Progress(total)
     today = datetime.now(timezone.utc).date()
 
+    # Se cargan días completos (todos los símbolos), del más reciente hacia atrás. El objetivo solo se
+    # revisa al terminar cada día, así que el total final puede pasar de TARGET_DOCS.
     for back in range(1, MAX_DAYS_BACK + 1):
+        if total >= TARGET_DOCS:
+            break
         day = today - timedelta(days=back)
+        log.info("== Día %s ==", day)
         for sym in (s.upper() for s in SYMBOLS):
-            if total >= TARGET_DOCS:
-                break
             key = f"{sym}-{day}"
             if progress.find_one({"_id": key, "status": "done"}):
                 continue
@@ -162,13 +165,11 @@ def main():
             try:
                 for doc in rows(path, sym):
                     buf.append(doc)
-                    if len(buf) >= BATCH_SIZE or total + loaded + len(buf) >= TARGET_DOCS:
+                    if len(buf) >= BATCH_SIZE:
                         coll.insert_many(buf, ordered=False)
                         loaded += len(buf)
                         buf = []
                         prog.show(total + loaded, key)
-                        if total + loaded >= TARGET_DOCS:
-                            break
                 if buf:
                     coll.insert_many(buf, ordered=False)
                     loaded += len(buf)
@@ -178,10 +179,22 @@ def main():
             progress.update_one({"_id": key}, {"$set": {"status": "done", "docs": loaded}})
             log.info("%s terminado: %d trades cargados", key, loaded)
             prog.show(total, key, force=True)
-        if total >= TARGET_DOCS:
-            break
 
-    log.info("Listo. Documentos en %s.%s: %d", DB_NAME, COLLECTION, coll.count_documents({}))
+    # Resumen: días cargados (del más reciente al más antiguo) y documentos por día.
+    days = list(progress.aggregate([
+        {"$match": {"status": "done"}},
+        {"$group": {"_id": "$day", "docs": {"$sum": "$docs"}, "symbols": {"$push": "$symbol"}}},
+        {"$sort": {"_id": -1}},
+    ]))
+    fmt = lambda n: f"{n:,}".replace(",", ".")
+    log.info("========== RESUMEN ==========")
+    log.info("Días obtenidos: %d", len(days))
+    for d in days:
+        log.info("  %s: %s trades (%s)", d["_id"].date(), fmt(d["docs"]), ", ".join(sorted(d["symbols"])))
+    log.info("Documentos en %s.%s: %s (objetivo mínimo: %s)",
+             DB_NAME, COLLECTION, fmt(coll.count_documents({})), fmt(TARGET_DOCS))
+    if total < TARGET_DOCS:
+        log.warning("No se alcanzó el objetivo en %d días hacia atrás (MAX_DAYS_BACK)", MAX_DAYS_BACK)
 
 
 if __name__ == "__main__":

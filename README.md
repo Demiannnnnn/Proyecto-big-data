@@ -16,9 +16,10 @@ recolector en Python guarda en MongoDB. Crece solo mientras los contenedores est
 ./setup.sh
 ```
 
-Construye las imágenes, levanta MongoDB y lo llena con **10.000.000 de trades** históricos de Binance
-(archivos públicos de [data.binance.vision](https://data.binance.vision), mismos campos que el WebSocket).
-Recorre los días hacia atrás desde ayer, para BTC, ETH, BNB, SOL y XRP, hasta llegar al objetivo.
+Construye las imágenes, levanta MongoDB y lo llena con trades históricos de Binance (archivos públicos de
+[data.binance.vision](https://data.binance.vision), mismos campos que el WebSocket). Carga **días completos**
+(BTC, ETH, BNB, SOL y XRP), desde ayer hacia atrás, hasta la mínima cantidad de días que sume al menos
+**10.000.000 de trades** (el total puede pasar de 10 M). Al final muestra cuántos días se cargaron y cuáles.
 Se puede volver a ejecutar sin duplicar: si se cortó, continúa desde donde quedó.
 
 ```bash
