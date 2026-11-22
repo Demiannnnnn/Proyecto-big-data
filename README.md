@@ -10,6 +10,14 @@ recolector en Python guarda en MongoDB. Crece solo mientras los contenedores est
 - Docker y Docker Compose
 - Acceso a internet (para conectarse a `stream.binance.com`)
 
+## Orden de uso
+
+| # | Paso                        | Comando                                   | Cuándo                                              |
+|---|-----------------------------|-------------------------------------------|-----------------------------------------------------|
+| 1 | Cargar los 10 M de trades   | `./setup.sh`                              | Una vez, con tiempo: descarga el histórico de Binance |
+| 2 | Demostración en tiempo real | `./scripts/recolectar.sh`                 | En clases; se detiene con Ctrl+C                    |
+| 3 | Consultas                   | `docker compose exec mongo mongosh crypto` | Después; ver [Pruebas básicas](#pruebas-básicas)  |
+
 ## Instalación y carga de datos (10 millones de trades)
 
 ```bash
@@ -26,6 +34,19 @@ Se puede volver a ejecutar sin duplicar: si se cortó, continúa desde donde que
 TARGET_DOCS=1000000 ./setup.sh   # otro objetivo
 ./setup.sh --live                # además deja corriendo el recolector en vivo (seguirá sumando trades)
 ```
+
+## Consumo en vivo con límite
+
+```bash
+./scripts/recolectar.sh               # consume trades en vivo hasta el límite SUMAR o hasta Ctrl+C
+SUMAR=50000 ./scripts/recolectar.sh   # otro límite
+```
+
+Muestra en tiempo real cómo entran los trades a MongoDB: cantidad, trades/s y total de la colección.
+El límite `SUMAR` es la primera variable de `scripts/recolectar.sh`. Por defecto es 10.000.000.000, es
+decir, en la práctica corre hasta que se corta con **Ctrl+C**. Al detenerse, por el límite o por
+Ctrl+C, muestra un resumen de cuántos trades llegaron por símbolo. Si el recolector permanente
+(`collector`) está corriendo, el script lo detiene antes, para no guardar dos veces los mismos trades.
 
 ## Recolector en vivo
 
@@ -85,10 +106,12 @@ db.trades.aggregate([
 ## Estructura
 
 ```
-docker-compose.yml     # mongo + collector
-setup.sh               # despliegue + carga histórica hasta TARGET_DOCS
-collector/collector.py # WebSocket -> lotes -> insert_many en colección time-series
-collector/loader.py    # carga histórica desde data.binance.vision (servicio `loader`, perfil "load")
+docker-compose.yml       # mongo + collector (+ loader y recolector, que se ejecutan a pedido)
+setup.sh                 # despliegue + carga histórica hasta TARGET_DOCS
+scripts/recolectar.sh    # consumo en vivo hasta SUMAR trades nuevos, con avance en tiempo real
+collector/collector.py   # WebSocket -> lotes -> insert_many en colección time-series
+collector/loader.py      # carga histórica desde data.binance.vision (servicio `loader`, perfil "load")
+collector/recolectar.py  # recolector con límite SUMAR (servicio `recolector`, perfil "live")
 collector/Dockerfile
 ```
 
