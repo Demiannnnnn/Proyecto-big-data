@@ -33,5 +33,17 @@ services:
       SYMBOLS: btcusdt,ethusdt,bnbusdt,solusdt,xrpusdt
       TARGET_DOCS: ${TARGET_DOCS:-10000000}
 
+  recolector:                   # consumo en vivo con límite SUMAR (lo ejecuta scripts/recolectar.sh)
+    build: ./collector
+    profiles: ["live"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: ["python", "-u", "recolectar.py"]
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      SYMBOLS: btcusdt,ethusdt,bnbusdt,solusdt,xrpusdt
+      SUMAR:                    # sin valor aquí: lo fija scripts/recolectar.sh
+
 volumes:
   mongo_data:
