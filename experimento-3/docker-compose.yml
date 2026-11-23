@@ -1,0 +1,29 @@
+# Experimento 3: replica set de 3 nodos, aparte del MongoDB principal (no toca crypto.trades).
+# Lo levanta y lo borra exp3_failover.sh; no hace falta usarlo a mano.
+
+x-nodo: &nodo
+  image: mongo:8.0
+  # Caché chica: 3 nodos + el MongoDB principal deben caber en la memoria de Docker.
+  command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--wiredTigerCacheSizeGB", "0.25"]
+  healthcheck:
+    test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+    interval: 2s
+    timeout: 5s
+    retries: 30
+
+services:
+  rs1: *nodo
+  rs2: *nodo
+  rs3: *nodo
+
+  escritor:                     # inserta trades sin parar y mide (escritor.py)
+    build: ../collector         # misma imagen del proyecto (Python + pymongo)
+    profiles: ["exp"]
+    working_dir: /exp
+    volumes:
+      - ./escritor.py:/exp/escritor.py:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # para leer la muestra desde el MongoDB principal
+    environment:
+      FUENTE_URI: mongodb://host.docker.internal:27017
+      RS_URI: mongodb://rs1:27017,rs2:27017,rs3:27017/?replicaSet=rs0
