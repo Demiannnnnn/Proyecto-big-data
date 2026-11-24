@@ -3,23 +3,32 @@
 # Experimento 2 (Hernán Muñoz) - Modelado: normal, normal con índice y time-series
 # ============================================================================
 # Hace todo el experimento con un solo comando:
-#   1. desactiva el recolector (si estaba activo) para que no entren trades nuevos,
+#   1. desactiva el recolector (si estaba activo) para medir sin ruido de CPU,
 #   2. copia exp2_modelado.js al contenedor mongo,
-#   3. crea A, B y C en la base "bench" y muestra espacio, conteos y tiempos,
+#   3. lo ejecuta con mongosh: crea A, B y C en la base "bench", calcula la
+#      consulta a partir de los datos y muestra espacio, conteos y tiempos,
 #   4. reactiva el recolector al terminar (o si algo falla).
 #
-# Uso (desde cualquier carpeta; en Windows, Git Bash o WSL):
-#   ./experimento-2/exp2_modelado.sh              # 1.000.000 de trades (unos minutos)
-#   ./experimento-2/exp2_modelado.sh 100000       # prueba rápida con 100.000
+# Funciona con los trades que haya en crypto.trades, de cualquier día: la
+# muestra, el símbolo y la ventana de la consulta se calculan con reglas fijas
+# (ver el encabezado de exp2_modelado.js), no con fechas escritas a mano.
 #
-# Requiere el MongoDB de la Etapa 1 levantado y con al menos N trades en
-# crypto.trades. crypto.trades no se modifica; la base "bench" se borra y se recrea.
+# Uso (desde cualquier carpeta; en Windows, Git Bash o WSL):
+#   ./experimento-2/exp2_modelado.sh                         # 1.000.000 de trades (unos minutos)
+#   ./experimento-2/exp2_modelado.sh 100000                  # prueba rápida con 100.000
+#   ./experimento-2/exp2_modelado.sh 1000000 2026-11-20      # solo trades de ese día UTC
+#   FRACCION=0.05 ./experimento-2/exp2_modelado.sh           # la consulta devuelve el 5 %
+#
+# Requiere el MongoDB de la Etapa 1 levantado y con trades (./setup.sh).
+# crypto.trades no se modifica; la base "bench" se borra y se recrea.
 # ============================================================================
 set -euo pipefail
 export MSYS_NO_PATHCONV=1                      # evita que Git Bash cambie las rutas /tmp
 
 cd "$(dirname "$0")/.."                        # raíz del repo (donde está docker-compose.yml)
 N="${1:-1000000}"
+DIA="${2:-}"
+FRACCION="${FRACCION:-0.02}"
 JS="experimento-2/exp2_modelado.js"
 
 hora() { date +%H:%M:%S; }
@@ -47,20 +56,13 @@ reactivar() {
 }
 trap reactivar EXIT
 
-# Comprobar que hay suficientes trades.
-HAY=$(docker compose exec -T mongo mongosh crypto --quiet --eval 'db.trades.countDocuments({})' | tr -d '\r' | tail -n 1)
-echo "[$(hora)] Trades en crypto.trades: $HAY (se usarán $N)"
-if [ "$HAY" -lt "$N" ]; then
-  echo "Hay menos trades que los pedidos. Use un N menor, por ejemplo: $0 $HAY"
-  exit 1
-fi
-
 # Paso 2: copiar el script al contenedor.
 docker compose cp "$JS" mongo:/tmp/exp2_modelado.js
 
-# Pasos 3 a 8: ejecutar el experimento completo dentro de mongosh.
-echo "[$(hora)] Ejecutando el experimento con N=$N"
-docker compose exec -T mongo mongosh crypto --quiet \
-  --eval "load('/tmp/exp2_modelado.js'); experimento($N)"
+# Pasos 3 en adelante: el script cuenta los trades, arma la muestra, calcula la
+# consulta y mide todo (si hay menos de N trades, usa los que haya).
+echo "[$(hora)] Ejecutando el experimento con N=$N${DIA:+ DIA=$DIA} FRACCION=$FRACCION"
+docker compose exec -T -e N="$N" -e DIA="$DIA" -e FRACCION="$FRACCION" mongo \
+  mongosh crypto --quiet --file /tmp/exp2_modelado.js
 
 echo "[$(hora)] Listo. La base bench queda con las 3 colecciones para revisarlas."
